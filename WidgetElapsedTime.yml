@@ -1,0 +1,159 @@
+commonfields:
+  id: 32cac04d-a1c8-4b8e-81a6-27a1ab2ce9f7
+  version: 66
+vcShouldKeepItemLegacyProdMachine: false
+name: WidgetElapsedTime
+script: |
+  import itertools
+  from collections import defaultdict
+  from typing import Dict, Any, Optional
+
+
+  NOW = datetime.utcnow()
+
+
+  def parse_time(tstr: str) -> datetime:
+      """ Create a new datetime object from a time string
+
+      :param tstr: a time string
+      :return: datetime object converted from tstr
+      """
+      def _parse_demisto_time(tstr: str):
+          """ Create a new datetime object from a demisto time string
+
+          :param tstr: a demisto time string
+          :return: datetime object converted from tstr
+          """
+          m = re.match(
+              r'^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(\.([0-9]+))?(([+-])([0-9]{2}):([0-9]{2})|Z)$',
+              tstr)
+          if not m:
+              raise ValueError(f'Incorrect time format: {tstr}')
+
+          year, month, day, hour, minute, second, dummy, fraction, tzname, tzsym, tzhour, tzmin = m.groups()
+          microsecond = 0 if not fraction else int(fraction[:6])
+
+          if tzname == 'Z':
+              tz = 0
+          elif tzsym:
+              tz = (int(tzhour) * 3600) + int(tzmin)
+              if tzsym == '-':
+                  tz = tz * -1
+              elif tzsym != '+':
+                  raise ValueError(f'Incorrect timezone: {tstr}')
+          else:
+              raise ValueError(f'Incorrect timezone: {tstr}')
+
+          dt = datetime(
+              year=int(year),
+              month=int(month),
+              day=int(day),
+              hour=int(hour),
+              minute=int(minute),
+              second=int(second),
+              microsecond=microsecond)
+          return dt - timedelta(seconds=tz)
+
+      try:
+          return parse_date_string(tstr)
+      except ValueError:
+          return _parse_demisto_time(tstr)
+
+
+  def get_elapsed_time(incident: Dict[str, Any], timer_name: str) -> int:
+      timer = demisto.get(incident, f'CustomFields.{timer_name}', {})
+
+      accumulated_pause = int(timer.get('accumulatedPause', 0))
+
+      run_status = timer.get('runStatus', '')
+      if run_status == 'ended':
+          total_duration = int(timer.get('totalDuration', 0))
+      elif run_status == 'pending':
+          time_from = parse_time(timer.get('startDate'))
+          time_until = parse_time(timer.get('lastPauseDate'))
+          total_duration = (time_until.timestamp() - time_from.timestamp()) - accumulated_pause
+      else:
+          time_from = parse_time(timer.get('startDate', '0001-01-01T00:00:00Z'))
+          time_until = NOW
+          if time_from <= datetime.fromtimestamp(0):
+              total_duration = 0
+          else:
+              total_duration = (time_until.timestamp() - time_from.timestamp()) - accumulated_pause
+
+      return int(total_duration)
+
+
+  def collect_elapsed_time_by_key(key: str, timer_name: str, fromdate: datetime, todate: datetime):
+
+      data_set = defaultdict(int)
+      for page in itertools.count():
+          contents = execute_command('getIncidents',
+                                     {
+                                         'fromdate': fromdate.isoformat(),
+                                         'todate': todate.isoformat(),
+                                         'size': 100,
+                                         'page': page
+                                     },
+                                     extract_contents=True)
+          incidents = demisto.get(contents, 'data')
+          if not incidents:
+              break
+
+          for incident in incidents:
+              data_set[demisto.get(incident, key) or ''] += get_elapsed_time(incident, timer_name)
+
+      return data_set
+
+
+  ''' MAIN FUNCTION '''
+
+
+  def main():
+      args = demisto.args()
+      key = args.get('key')
+      if not key:
+          raise DemistoException('key is required.')
+
+      timer_name = args.get('timer_name')
+      if not timer_name:
+          raise DemistoException('timer_name is required.')
+
+      date_from = parse_time(args.get('from'))
+      date_to = parse_time(args.get('to'))
+      date_from = datetime.fromtimestamp(0) if date_from < datetime.fromtimestamp(0) else date_from
+      date_to = NOW if date_to < datetime.fromtimestamp(0) else date_to
+      date_to = date_from if date_from > date_to else date_to
+      date_to = NOW if date_to > NOW else date_to
+
+      data_set = collect_elapsed_time_by_key(key, timer_name, date_from, date_to)
+
+      return_results(json.dumps([{
+          'name': name,
+          'data': [int(data / (1*60*60))]
+      } for name, data in data_set.items()]))
+
+
+  ''' ENTRY POINT '''
+
+
+  if __name__ in ('__main__', '__builtin__', 'builtins'):
+      main()
+type: python
+tags:
+- widget
+enabled: true
+args:
+- name: key
+  required: true
+  description: The node name by which to categorized.
+- name: timer_name
+  required: true
+  description: The incident field of the timer
+scripttarget: 0
+subtype: python3
+pswd: ""
+runonce: false
+dockerimage: demisto/python3:3.7.5.3471
+runas: DBotWeakRole
+engineinfo: {}
+mainengineinfo: {}
