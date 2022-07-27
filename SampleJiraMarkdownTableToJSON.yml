@@ -1,0 +1,53 @@
+commonfields:
+  id: 13ae4572-17fc-412e-8537-9b9ce8dc6c33
+  version: 3
+vcShouldKeepItemLegacyProdMachine: false
+name: SampleJiraMarkdownTableToJSON
+script: |2+
+
+  ''' MAIN FUNCTION '''
+
+
+  def main():
+      args = demisto.args()
+      md = args['value']
+
+      js = []
+      keys = []
+      for i, line in enumerate(md.strip().split('\n')):
+          if i == 0:
+              header = line.strip().replace('*||*', '|').replace('|*', '').replace('*|', '')
+              keys = [k.strip() for k in header.split('|')]
+          else:
+              js.append({
+                  keys[ii]: v.strip() for ii, v in enumerate(line.split('|')) if ii > 0 and ii < len(keys)-1
+              })
+      return_results(js)
+
+
+  ''' ENTRY POINT '''
+  if __name__ in ('__main__', '__builtin__', 'builtins'):
+      main()
+
+type: python
+tags:
+- markdown
+- transformer
+comment: Converts Jira Markdown to JSON.
+enabled: true
+args:
+- name: value
+  required: true
+  description: Markdown Text to transform.
+outputs:
+- contextPath: MarkdownToHTML.HTML
+  description: The HTML converted text.
+  type: String
+scripttarget: 0
+subtype: python3
+pswd: ""
+runonce: false
+dockerimage: demisto/bs4-py3:1.0.0.30051
+runas: DBotWeakRole
+engineinfo: {}
+mainengineinfo: {}
